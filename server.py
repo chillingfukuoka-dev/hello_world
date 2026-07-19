@@ -45,10 +45,11 @@ HTML = r"""<!doctype html>
   <div class="buttons">
     <button id="listen" class="primary">聞き取り開始</button>
     <button id="send">入力文をAIで説明</button>
+    <button id="reset">リセット</button>
   </div>
 
   <p id="status">待機中</p>
-  <p class="note">聞き取り中は約6秒ごとに音声を送信します。使用した分だけOpenAI API料金がかかります。</p>
+  <p class="note">聞き取り中は約10秒ごとに音声を送信します。使用した分だけOpenAI API料金がかかります。</p>
 
   <p>ROKIDに表示される内容：</p>
   <pre id="latest">読み込み中...</pre>
@@ -58,9 +59,10 @@ HTML = r"""<!doctype html>
     const statusText = document.getElementById("status");
     const listenButton = document.getElementById("listen");
     const sendButton = document.getElementById("send");
+    const resetButton = document.getElementById("reset");
     const latestBox = document.getElementById("latest");
 
-    const CHUNK_MS = 6000;
+    const CHUNK_MS = 10000;
     let listening = false;
     let mediaStream = null;
     let recorder = null;
@@ -102,6 +104,7 @@ HTML = r"""<!doctype html>
       const extension = mimeType.includes("webm") ? "webm" : "m4a";
       const form = new FormData();
       form.append("audio", blob, `speech.${extension}`);
+      form.append("context", input.value.slice(-500));
 
       const response = await fetch("/transcribe", {method: "POST", body: form});
       const data = await response.json();
@@ -164,7 +167,14 @@ HTML = r"""<!doctype html>
       }
 
       try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({audio: true});
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            channelCount: 1
+          }
+        });
         listening = true;
         listenButton.textContent = "聞き取り停止";
         listenButton.classList.remove("primary");
@@ -220,6 +230,24 @@ HTML = r"""<!doctype html>
         statusText.textContent = error.message;
       } finally {
         sendButton.disabled = false;
+      }
+    });
+
+    resetButton.addEventListener("click", async () => {
+      if (listening) stopListening();
+      resetButton.disabled = true;
+      input.value = "";
+      statusText.textContent = "リセット中...";
+      try {
+        const response = await fetch("/reset", {method: "POST"});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "リセットに失敗しました");
+        latestBox.textContent = data.text;
+        statusText.textContent = "リセットしました";
+      } catch (error) {
+        statusText.textContent = error.message;
+      } finally {
+        resetButton.disabled = false;
       }
     });
 
@@ -296,12 +324,20 @@ def explain_with_openai(text):
     return result or NO_TERMS
 
 
-def transcribe_with_openai(audio_file):
+def transcribe_with_openai(audio_file, context=""):
     mime_type = audio_file.mimetype or "audio/mp4"
     filename = audio_file.filename or ("speech.webm" if "webm" in mime_type else "speech.m4a")
     audio_bytes = audio_file.read()
     if len(audio_bytes) < 1000:
         return ""
+
+    transcription_prompt = (
+        "日本語のIT会議です。文脈に合う自然な日本語として、"
+        "API、SDK、クラウド、デプロイなどのIT用語を正確に文字起こししてください。"
+    )
+    previous_context = context[-500:].strip()
+    if previous_context:
+        transcription_prompt += f" 直前の会話: {previous_context}"
 
     response = requests.post(
         "https://api.openai.com/v1/audio/transcriptions",
@@ -310,7 +346,7 @@ def transcribe_with_openai(audio_file):
         data={
             "model": os.environ.get("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe"),
             "language": "ja",
-            "prompt": "日本語のIT会議です。API、SDK、クラウド、デプロイなどのIT用語を正確に文字起こししてください。",
+            "prompt": transcription_prompt,
         },
         timeout=60,
     )
@@ -353,6 +389,12 @@ def text_only():
     return Response(get_latest(), content_type="text/plain; charset=utf-8")
 
 
+@app.post("/reset")
+def reset():
+    set_latest("まだ説明はありません")
+    return jsonify(text=get_latest())
+
+
 @app.post("/explain")
 def explain():
     payload = request.get_json(silent=True) or {}
@@ -376,8 +418,10 @@ def transcribe():
     if audio is None:
         return jsonify(error="音声ファイルがありません"), 400
 
+    context = str(request.form.get("context", "")).strip()
+
     try:
-        transcript = transcribe_with_openai(audio)
+        transcript = transcribe_with_openai(audio, context)
         if not transcript:
             return jsonify(transcript="", explanation="", updated=False, text=get_latest())
 
