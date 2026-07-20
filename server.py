@@ -11,6 +11,16 @@ app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 latest_text = "まだ説明はありません"
 latest_lock = threading.Lock()
 NO_TERMS = "IT用語は見つかりませんでした"
+TRANSCRIPTION_CONTEXT_MARKER = "直前の会話:"
+TRANSCRIPTION_PROMPT_LEAKS = (
+    "日本語のIT会議",
+    "文脈に合う自然な日本語",
+    "IT用語を正確に文字起こし",
+)
+SILENCE_HALLUCINATIONS = (
+    "ご視聴ありがとうございました",
+    "字幕をご覧いただきありがとうございました",
+)
 
 
 HTML = r"""<!doctype html>
@@ -20,19 +30,103 @@ HTML = r"""<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>専門用語サーバー</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 24px; color: #111; }
-    main { max-width: 680px; margin: 0 auto; }
-    h1 { font-size: 32px; margin: 20px 0 12px; }
+    :root {
+      color-scheme: light;
+      --forest: #355c45;
+      --forest-dark: #244232;
+      --sage: #8aa27d;
+      --sage-pale: #e4eadf;
+      --coffee: #6b4d3b;
+      --terracotta: #a86645;
+      --paper: #f5f1e8;
+      --surface: #fffdf8;
+      --line: #d9d0c2;
+      --ink: #26332a;
+      --muted: #667066;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+      margin: 0;
+      min-height: 100vh;
+      padding: 24px 18px 48px;
+      color: var(--ink);
+      background: var(--paper);
+    }
+    main {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 28px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-top: 6px solid var(--forest);
+      border-radius: 8px;
+    }
+    h1 { font-size: 32px; margin: 4px 0 12px; color: var(--forest-dark); }
     p { line-height: 1.6; }
-    textarea { width: 100%; min-height: 150px; box-sizing: border-box; padding: 14px; font-size: 18px; border: 1px solid #ccc; border-radius: 6px; }
+    textarea {
+      width: 100%;
+      min-height: 150px;
+      padding: 14px;
+      font-size: 18px;
+      color: var(--ink);
+      background: #fbfaf5;
+      border: 1px solid #b8c3b1;
+      border-radius: 8px;
+      resize: vertical;
+    }
+    textarea:focus {
+      outline: none;
+      border-color: var(--forest);
+      box-shadow: 0 0 0 3px rgba(53, 92, 69, .16);
+    }
+    textarea::placeholder { color: #8a8d84; }
     .buttons { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
-    button { border: 0; border-radius: 6px; padding: 12px 18px; font-size: 18px; background: #e9e9eb; color: #111; }
-    button.primary { background: #087ff5; color: white; }
-    button.stop { background: #d92d20; color: white; }
-    button:disabled { opacity: .55; }
-    #status { min-height: 24px; color: #555; }
-    #latest { font-size: 20px; line-height: 1.55; white-space: pre-wrap; background: #f3f3f3; padding: 16px; min-height: 64px; }
-    .note { color: #666; font-size: 14px; }
+    button {
+      min-height: 48px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 12px 18px;
+      font-size: 18px;
+      font-weight: 700;
+      background: #eee8df;
+      color: #463529;
+      cursor: pointer;
+    }
+    button:hover { filter: brightness(.96); }
+    button.primary { background: var(--forest); border-color: var(--forest); color: white; }
+    button.stop { background: var(--terracotta); border-color: var(--terracotta); color: white; }
+    #send { background: var(--coffee); border-color: var(--coffee); color: white; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    #status {
+      min-height: 24px;
+      margin-top: 18px;
+      padding: 10px 12px;
+      color: var(--forest-dark);
+      font-weight: 700;
+      background: var(--sage-pale);
+      border-left: 4px solid var(--sage);
+      border-radius: 4px;
+    }
+    .output-title { color: var(--coffee); font-weight: 700; }
+    #latest {
+      font-size: 20px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      background: #eef1e8;
+      border: 1px solid #cad3c3;
+      border-left: 5px solid var(--coffee);
+      border-radius: 6px;
+      padding: 16px;
+      min-height: 64px;
+    }
+    .note { color: var(--muted); font-size: 14px; }
+    @media (max-width: 520px) {
+      body { padding: 12px 10px 32px; }
+      main { padding: 20px 16px; }
+      h1 { font-size: 28px; }
+      button { width: 100%; }
+    }
   </style>
 </head>
 <body>
@@ -45,13 +139,12 @@ HTML = r"""<!doctype html>
   <div class="buttons">
     <button id="listen" class="primary">聞き取り開始</button>
     <button id="send">入力文をAIで説明</button>
-    <button id="reset">リセット</button>
   </div>
 
   <p id="status">待機中</p>
-  <p class="note">聞き取り中は約10秒ごとに音声を送信します。使用した分だけOpenAI API料金がかかります。</p>
+    <p class="note">聞き取り中は、声が入った約10秒分だけを送信します。無音は送信しません。</p>
 
-  <p>ROKIDに表示される内容：</p>
+    <p class="output-title">ROKIDに表示される内容：</p>
   <pre id="latest">読み込み中...</pre>
 
   <script>
@@ -59,15 +152,26 @@ HTML = r"""<!doctype html>
     const statusText = document.getElementById("status");
     const listenButton = document.getElementById("listen");
     const sendButton = document.getElementById("send");
-    const resetButton = document.getElementById("reset");
     const latestBox = document.getElementById("latest");
 
-    const CHUNK_MS = 10000;
-    let listening = false;
+const CHUNK_MS = 10000;
+const VOICE_RMS_THRESHOLD = 0.035;
+const VOICE_FRAME_COUNT = 6;
+const TRANSCRIPTION_CONTEXT_MARKER = "直前の会話:";
+const TRANSCRIPTION_PROMPT_MARKERS = [
+  "日本語のIT会議",
+  "文脈に合う自然な日本語",
+  "IT用語を正確に文字起こし"
+];
+let listening = false;
     let mediaStream = null;
     let recorder = null;
     let stopTimer = null;
     let uploadQueue = Promise.resolve();
+    let audioContext = null;
+    let audioSource = null;
+    let analyser = null;
+    let lastTranscript = "";
 
     async function loadLatest() {
       try {
@@ -91,10 +195,27 @@ HTML = r"""<!doctype html>
       return "";
     }
 
-    function appendTranscript(text) {
-      if (!text) return;
+function cleanDisplayedTranscript(text) {
+  let cleaned = String(text || "").replace(/\s+/g, " ").trim();
+  if (!cleaned) return "";
+
+  const markerIndex = cleaned.lastIndexOf(TRANSCRIPTION_CONTEXT_MARKER);
+  if (markerIndex >= 0) {
+    cleaned = cleaned.slice(markerIndex + TRANSCRIPTION_CONTEXT_MARKER.length).trim();
+  }
+
+  if (TRANSCRIPTION_PROMPT_MARKERS.some((marker) => cleaned.includes(marker))) {
+    return "";
+  }
+  return cleaned;
+}
+
+function appendTranscript(text) {
+  const cleaned = cleanDisplayedTranscript(text);
+  if (!cleaned || cleaned === lastTranscript) return;
+      lastTranscript = cleaned;
       const current = input.value.trim();
-      input.value = (current ? current + "\n" : "") + text;
+      input.value = (current ? current + "\n" : "") + cleaned;
       if (input.value.length > 1800) input.value = input.value.slice(-1800);
       input.scrollTop = input.scrollHeight;
     }
@@ -104,7 +225,6 @@ HTML = r"""<!doctype html>
       const extension = mimeType.includes("webm") ? "webm" : "m4a";
       const form = new FormData();
       form.append("audio", blob, `speech.${extension}`);
-      form.append("context", input.value.slice(-500));
 
       const response = await fetch("/transcribe", {method: "POST", body: form});
       const data = await response.json();
@@ -127,7 +247,25 @@ HTML = r"""<!doctype html>
       const mimeType = chooseMimeType();
       const options = mimeType ? {mimeType} : undefined;
       const chunks = [];
-      recorder = new MediaRecorder(mediaStream, options);
+      let voiceFrames = 0;
+      let levelTimer = null;
+      recorder = options
+        ? new MediaRecorder(mediaStream, options)
+        : new MediaRecorder(mediaStream);
+
+      if (analyser) {
+        const levels = new Uint8Array(analyser.fftSize);
+        levelTimer = setInterval(() => {
+          analyser.getByteTimeDomainData(levels);
+          let sumSquares = 0;
+          for (let index = 0; index < levels.length; index += 1) {
+            const normalized = (levels[index] - 128) / 128;
+            sumSquares += normalized * normalized;
+          }
+          const rms = Math.sqrt(sumSquares / levels.length);
+          if (rms >= VOICE_RMS_THRESHOLD) voiceFrames += 1;
+        }, 100);
+      }
 
       recorder.ondataavailable = event => {
         if (event.data && event.data.size > 0) chunks.push(event.data);
@@ -140,14 +278,17 @@ HTML = r"""<!doctype html>
 
       recorder.onstop = () => {
         clearTimeout(stopTimer);
+        if (levelTimer) clearInterval(levelTimer);
         const actualType = recorder.mimeType || mimeType || "audio/mp4";
         const blob = new Blob(chunks, {type: actualType});
 
         if (listening) setTimeout(recordNextChunk, 100);
-        if (blob.size > 1000) {
+        if (blob.size > 1000 && (!analyser || voiceFrames >= VOICE_FRAME_COUNT)) {
           uploadQueue = uploadQueue
             .then(() => uploadAudio(blob, actualType))
             .catch(error => { statusText.textContent = error.message; });
+        } else if (listening) {
+          statusText.textContent = "聞き取り中（音声待ち）";
         }
 
         if (!listening) closeMicrophone();
@@ -175,6 +316,14 @@ HTML = r"""<!doctype html>
             channelCount: 1
           }
         });
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextClass) {
+          audioContext = new AudioContextClass();
+          audioSource = audioContext.createMediaStreamSource(mediaStream);
+          analyser = audioContext.createAnalyser();
+          analyser.fftSize = 1024;
+          audioSource.connect(analyser);
+        }
         listening = true;
         listenButton.textContent = "聞き取り停止";
         listenButton.classList.remove("primary");
@@ -187,8 +336,13 @@ HTML = r"""<!doctype html>
 
     function closeMicrophone() {
       if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
+      if (audioSource) audioSource.disconnect();
+      if (audioContext && audioContext.state !== "closed") audioContext.close();
       mediaStream = null;
       recorder = null;
+      audioContext = null;
+      audioSource = null;
+      analyser = null;
     }
 
     function stopListening() {
@@ -230,24 +384,6 @@ HTML = r"""<!doctype html>
         statusText.textContent = error.message;
       } finally {
         sendButton.disabled = false;
-      }
-    });
-
-    resetButton.addEventListener("click", async () => {
-      if (listening) stopListening();
-      resetButton.disabled = true;
-      input.value = "";
-      statusText.textContent = "リセット中...";
-      try {
-        const response = await fetch("/reset", {method: "POST"});
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "リセットに失敗しました");
-        latestBox.textContent = data.text;
-        statusText.textContent = "リセットしました";
-      } catch (error) {
-        statusText.textContent = error.message;
-      } finally {
-        resetButton.disabled = false;
       }
     });
 
@@ -324,36 +460,46 @@ def explain_with_openai(text):
     return result or NO_TERMS
 
 
-def transcribe_with_openai(audio_file, context=""):
+def clean_transcript(text):
+    cleaned = " ".join(str(text or "").split()).strip()
+    if not cleaned:
+        return ""
+
+    marker_index = cleaned.rfind(TRANSCRIPTION_CONTEXT_MARKER)
+    if marker_index >= 0:
+        cleaned = cleaned[marker_index + len(TRANSCRIPTION_CONTEXT_MARKER):].strip()
+
+    if not cleaned:
+        return ""
+    if any(marker in cleaned for marker in TRANSCRIPTION_PROMPT_LEAKS):
+        return ""
+    if any(phrase in cleaned for phrase in SILENCE_HALLUCINATIONS):
+        return ""
+    return cleaned
+
+
+def transcribe_with_openai(audio_file):
     mime_type = audio_file.mimetype or "audio/mp4"
     filename = audio_file.filename or ("speech.webm" if "webm" in mime_type else "speech.m4a")
     audio_bytes = audio_file.read()
     if len(audio_bytes) < 1000:
         return ""
 
-    transcription_prompt = (
-        "日本語のIT会議です。文脈に合う自然な日本語として、"
-        "API、SDK、クラウド、デプロイなどのIT用語を正確に文字起こししてください。"
-    )
-    previous_context = context[-500:].strip()
-    if previous_context:
-        transcription_prompt += f" 直前の会話: {previous_context}"
-
+    # Instruction-like prompts can be echoed into short transcription results.
     response = requests.post(
         "https://api.openai.com/v1/audio/transcriptions",
         headers={"Authorization": f"Bearer {api_key()}"},
         files={"file": (filename, audio_bytes, mime_type)},
         data={
-            "model": os.environ.get("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe"),
+            "model": os.environ.get("OPENAI_TRANSCRIBE_MODEL", "whisper-1"),
             "language": "ja",
-            "prompt": transcription_prompt,
         },
         timeout=60,
     )
     if not response.ok:
         raise OpenAIError(openai_error(response))
 
-    return response.json().get("text", "").strip()
+    return clean_transcript(response.json().get("text", ""))
 
 
 def set_latest(text):
@@ -389,12 +535,6 @@ def text_only():
     return Response(get_latest(), content_type="text/plain; charset=utf-8")
 
 
-@app.post("/reset")
-def reset():
-    set_latest("まだ説明はありません")
-    return jsonify(text=get_latest())
-
-
 @app.post("/explain")
 def explain():
     payload = request.get_json(silent=True) or {}
@@ -418,10 +558,8 @@ def transcribe():
     if audio is None:
         return jsonify(error="音声ファイルがありません"), 400
 
-    context = str(request.form.get("context", "")).strip()
-
     try:
-        transcript = transcribe_with_openai(audio, context)
+        transcript = transcribe_with_openai(audio)
         if not transcript:
             return jsonify(transcript="", explanation="", updated=False, text=get_latest())
 
