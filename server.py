@@ -28,7 +28,7 @@ HTML = r"""<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>専門用語サーバー</title>
+  <title>ツウジルAI</title>
   <style>
     :root {
       color-scheme: light;
@@ -43,6 +43,17 @@ HTML = r"""<!doctype html>
       --line: #d9d0c2;
       --ink: #26332a;
       --muted: #667066;
+      --forest: #5c7a5e;
+      --forest-dark: #2d3f2e;
+      --sage: #7a8f7b;
+      --sage-pale: #ebe5db;
+      --coffee: #2d3f2e;
+      --terracotta: #2d3f2e;
+      --paper: #f2ede4;
+      --surface: #f8f5ef;
+      --line: rgba(92, 122, 94, .20);
+      --ink: #2d3f2e;
+      --muted: #7a8f7b;
     }
     * { box-sizing: border-box; }
     body {
@@ -72,6 +83,8 @@ HTML = r"""<!doctype html>
       color: var(--ink);
       background: #fbfaf5;
       border: 1px solid #b8c3b1;
+      background: #ebe5db;
+      border: 1px solid rgba(92, 122, 94, .20);
       border-radius: 8px;
       resize: vertical;
     }
@@ -79,8 +92,10 @@ HTML = r"""<!doctype html>
       outline: none;
       border-color: var(--forest);
       box-shadow: 0 0 0 3px rgba(53, 92, 69, .16);
+      box-shadow: 0 0 0 3px rgba(92, 122, 94, .16);
     }
     textarea::placeholder { color: #8a8d84; }
+    textarea::placeholder { color: #7a8f7b; }
     .buttons { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
     button {
       min-height: 48px;
@@ -91,6 +106,8 @@ HTML = r"""<!doctype html>
       font-weight: 700;
       background: #eee8df;
       color: #463529;
+      background: #ebe5db;
+      color: #2d3f2e;
       cursor: pointer;
     }
     button:hover { filter: brightness(.96); }
@@ -115,6 +132,8 @@ HTML = r"""<!doctype html>
       white-space: pre-wrap;
       background: #eef1e8;
       border: 1px solid #cad3c3;
+      background: #ebe5db;
+      border: 1px solid rgba(92, 122, 94, .20);
       border-left: 5px solid var(--coffee);
       border-radius: 6px;
       padding: 16px;
@@ -131,7 +150,7 @@ HTML = r"""<!doctype html>
 </head>
 <body>
 <main>
-  <h1>専門用語サーバー AI版</h1>
+  <h1>ツウジルAI</h1>
   <p>文章または会話から、難しいIT用語を探してROKIDへ送ります。</p>
 
   <textarea id="term" placeholder="例：今日の会議でAPIとSDKとクラウドデプロイについて話します" autocomplete="off"></textarea>
