@@ -170,10 +170,12 @@ HTML = r"""<!doctype html>
   <div class="buttons">
     <button id="listen" class="primary">聞き取り開始</button>
     <button id="send">入力文をAIで説明</button>
+    <button id="audioPick" type="button">録音ファイルを送る</button>
+    <input id="audioFile" type="file" accept="audio/*,video/*" style="display:none">
   </div>
 
   <p id="status">待機中</p>
-    <p class="note">聞き取り中は、声が入った約10秒分だけを送信します。無音は送信しません。</p>
+    <p class="note">iPhoneで聞き取りが不安定な場合は、Safariで開き、マイク許可をONにしてください。うまくいかない時は「録音ファイルを送る」を使えます。</p>
 
     <p class="output-title">ROKIDに表示される内容：</p>
   <pre id="latest">読み込み中...</pre>
@@ -183,14 +185,16 @@ HTML = r"""<!doctype html>
     const statusText = document.getElementById("status");
     const listenButton = document.getElementById("listen");
     const sendButton = document.getElementById("send");
+    const audioPickButton = document.getElementById("audioPick");
+    const audioFileInput = document.getElementById("audioFile");
     const latestBox = document.getElementById("latest");
     const accessCodeInput = document.getElementById("accessCode");
     const saveCodeButton = document.getElementById("saveCode");
     const authOk = document.getElementById("authOk");
 
 const CHUNK_MS = 10000;
-const VOICE_RMS_THRESHOLD = 0.035;
-const VOICE_FRAME_COUNT = 6;
+const VOICE_RMS_THRESHOLD = 0.015;
+const VOICE_FRAME_COUNT = 2;
 const TRANSCRIPTION_CONTEXT_MARKER = "直前の会話:";
 const TRANSCRIPTION_PROMPT_MARKERS = [
   "日本語のIT会議",
@@ -221,6 +225,7 @@ let lastTranscript = "";
       authOk.style.display = hasCode ? "block" : "none";
       listenButton.disabled = !hasCode;
       sendButton.disabled = !hasCode;
+      audioPickButton.disabled = !hasCode;
       if (!hasCode) statusText.textContent = "利用コードを入力してください";
     }
 
@@ -248,6 +253,7 @@ let lastTranscript = "";
 
     function chooseMimeType() {
       const candidates = [
+        "audio/mp4;codecs=mp4a.40.2",
         "audio/mp4",
         "audio/webm;codecs=opus",
         "audio/webm"
@@ -285,7 +291,7 @@ function appendTranscript(text) {
 
     async function uploadAudio(blob, mimeType) {
       statusText.textContent = listening ? "聞き取り中・AI確認中..." : "最後の音声をAI確認中...";
-      const extension = mimeType.includes("webm") ? "webm" : "m4a";
+      const extension = mimeType.includes("webm") ? "webm" : mimeType.includes("video") ? "mp4" : "m4a";
       const form = new FormData();
       form.append("audio", blob, `speech.${extension}`);
 
@@ -350,7 +356,8 @@ function appendTranscript(text) {
         const blob = new Blob(chunks, {type: actualType});
 
         if (listening) setTimeout(recordNextChunk, 100);
-        if (blob.size > 1000 && (!analyser || voiceFrames >= VOICE_FRAME_COUNT)) {
+        const shouldUpload = blob.size > 1000 && (!analyser || voiceFrames >= VOICE_FRAME_COUNT || blob.size > 12000);
+        if (shouldUpload) {
           uploadQueue = uploadQueue
             .then(() => uploadAudio(blob, actualType))
             .catch(error => { statusText.textContent = error.message; });
@@ -375,17 +382,21 @@ function appendTranscript(text) {
       }
 
       try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-            channelCount: 1
-          }
-        });
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          });
+        } catch (firstError) {
+          mediaStream = await navigator.mediaDevices.getUserMedia({audio: true});
+        }
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         if (AudioContextClass) {
           audioContext = new AudioContextClass();
+          if (audioContext.state === "suspended") await audioContext.resume();
           audioSource = audioContext.createMediaStreamSource(mediaStream);
           analyser = audioContext.createAnalyser();
           analyser.fftSize = 1024;
@@ -397,7 +408,7 @@ function appendTranscript(text) {
         listenButton.classList.add("stop");
         recordNextChunk();
       } catch (error) {
-        statusText.textContent = "マイクの使用を許可してください";
+        statusText.textContent = `マイクの使用を許可してください（${error.name || "Error"}）`;
       }
     }
 
@@ -426,6 +437,22 @@ function appendTranscript(text) {
     listenButton.addEventListener("click", () => {
       if (listening) stopListening();
       else startListening();
+    });
+
+    audioPickButton.addEventListener("click", () => {
+      audioFileInput.click();
+    });
+
+    audioFileInput.addEventListener("change", async () => {
+      const file = audioFileInput.files && audioFileInput.files[0];
+      if (!file) return;
+      try {
+        await uploadAudio(file, file.type || "audio/mp4");
+      } catch (error) {
+        statusText.textContent = error.message;
+      } finally {
+        audioFileInput.value = "";
+      }
     });
 
     sendButton.addEventListener("click", async () => {
