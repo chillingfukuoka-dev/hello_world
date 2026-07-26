@@ -140,6 +140,18 @@ HTML = r"""<!doctype html>
       font-size: 16px;
     }
     .auth-ok { display: none; color: var(--forest); font-weight: 700; margin-top: 8px; }
+    .auth-box.saved {
+      border-color: rgba(42, 157, 110, .48);
+      background: #edf6ee;
+      box-shadow: 0 0 0 3px rgba(42, 157, 110, .10);
+    }
+    .auth-box.saved .auth-ok {
+      display: block;
+      padding: 10px 12px;
+      background: #fff;
+      border-left: 4px solid #2a9d6e;
+      border-radius: 6px;
+    }
     @media (max-width: 520px) {
       body { padding: 12px 10px 32px; }
       main { padding: 20px 16px; }
@@ -162,7 +174,7 @@ HTML = r"""<!doctype html>
       <input id="accessCode" type="password" placeholder="利用コード" autocomplete="current-password">
       <button id="saveCode" type="button">保存</button>
     </div>
-    <div id="authOk" class="auth-ok">利用コードを保存しました</div>
+    <div id="authOk" class="auth-ok">✅ 利用コードを保存しました。聞き取り開始を押せます。</div>
   </div>
 
   <textarea id="term" placeholder="例：今日の会議でAPIとSDKとクラウドデプロイについて話します" autocomplete="off"></textarea>
@@ -188,6 +200,7 @@ HTML = r"""<!doctype html>
     const audioPickButton = document.getElementById("audioPick");
     const audioFileInput = document.getElementById("audioFile");
     const latestBox = document.getElementById("latest");
+    const authBox = document.querySelector(".auth-box");
     const accessCodeInput = document.getElementById("accessCode");
     const saveCodeButton = document.getElementById("saveCode");
     const authOk = document.getElementById("authOk");
@@ -222,11 +235,13 @@ let lastTranscript = "";
 
     function refreshAuthState() {
       const hasCode = !!currentAccessCode();
+      authBox.classList.toggle("saved", hasCode);
       authOk.style.display = hasCode ? "block" : "none";
+      saveCodeButton.textContent = hasCode ? "保存済み" : "保存";
       listenButton.disabled = !hasCode;
       sendButton.disabled = !hasCode;
       audioPickButton.disabled = !hasCode;
-      if (!hasCode) statusText.textContent = "利用コードを入力してください";
+      statusText.textContent = hasCode ? "利用コードOK。聞き取り開始できます" : "利用コードを入力してください";
     }
 
     saveCodeButton.addEventListener("click", () => {
@@ -237,7 +252,7 @@ let lastTranscript = "";
       }
       localStorage.setItem("tsujiru_access_code", code);
       accessCodeInput.value = "";
-      statusText.textContent = "利用コードを保存しました";
+      statusText.textContent = "✅ 利用コードを保存しました。聞き取り開始を押してください";
       refreshAuthState();
     });
 
