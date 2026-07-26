@@ -32,17 +32,6 @@ HTML = r"""<!doctype html>
   <style>
     :root {
       color-scheme: light;
-      --forest: #355c45;
-      --forest-dark: #244232;
-      --sage: #8aa27d;
-      --sage-pale: #e4eadf;
-      --coffee: #6b4d3b;
-      --terracotta: #a86645;
-      --paper: #f5f1e8;
-      --surface: #fffdf8;
-      --line: #d9d0c2;
-      --ink: #26332a;
-      --muted: #667066;
       --forest: #5c7a5e;
       --forest-dark: #2d3f2e;
       --sage: #7a8f7b;
@@ -81,8 +70,6 @@ HTML = r"""<!doctype html>
       padding: 14px;
       font-size: 18px;
       color: var(--ink);
-      background: #fbfaf5;
-      border: 1px solid #b8c3b1;
       background: #ebe5db;
       border: 1px solid rgba(92, 122, 94, .20);
       border-radius: 8px;
@@ -91,10 +78,8 @@ HTML = r"""<!doctype html>
     textarea:focus {
       outline: none;
       border-color: var(--forest);
-      box-shadow: 0 0 0 3px rgba(53, 92, 69, .16);
       box-shadow: 0 0 0 3px rgba(92, 122, 94, .16);
     }
-    textarea::placeholder { color: #8a8d84; }
     textarea::placeholder { color: #7a8f7b; }
     .buttons { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
     button {
@@ -104,8 +89,6 @@ HTML = r"""<!doctype html>
       padding: 12px 18px;
       font-size: 18px;
       font-weight: 700;
-      background: #eee8df;
-      color: #463529;
       background: #ebe5db;
       color: #2d3f2e;
       cursor: pointer;
@@ -130,8 +113,6 @@ HTML = r"""<!doctype html>
       font-size: 20px;
       line-height: 1.55;
       white-space: pre-wrap;
-      background: #eef1e8;
-      border: 1px solid #cad3c3;
       background: #ebe5db;
       border: 1px solid rgba(92, 122, 94, .20);
       border-left: 5px solid var(--coffee);
@@ -140,11 +121,31 @@ HTML = r"""<!doctype html>
       min-height: 64px;
     }
     .note { color: var(--muted); font-size: 14px; }
+    .auth-box {
+      margin: 14px 0 18px;
+      padding: 14px;
+      background: #ebe5db;
+      border: 1px solid rgba(92, 122, 94, .20);
+      border-radius: 8px;
+    }
+    .auth-row { display: flex; gap: 10px; margin-top: 10px; }
+    .auth-row input {
+      flex: 1;
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid rgba(92, 122, 94, .24);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      font-size: 16px;
+    }
+    .auth-ok { display: none; color: var(--forest); font-weight: 700; margin-top: 8px; }
     @media (max-width: 520px) {
       body { padding: 12px 10px 32px; }
       main { padding: 20px 16px; }
       h1 { font-size: 28px; }
       button { width: 100%; }
+      .auth-row { flex-direction: column; }
     }
   </style>
 </head>
@@ -152,6 +153,17 @@ HTML = r"""<!doctype html>
 <main>
   <h1>ツウジルAI</h1>
   <p>文章または会話から、難しいIT用語を探してROKIDへ送ります。</p>
+  <p class="note">ROKIDアプリから使う場合は、先にROKIDとiPhoneをテザリング接続してください。</p>
+
+  <div class="auth-box">
+    <strong>利用コード</strong>
+    <p class="note">AI処理を使うには、管理者から受け取ったコードを入力してください。</p>
+    <div class="auth-row">
+      <input id="accessCode" type="password" placeholder="利用コード" autocomplete="current-password">
+      <button id="saveCode" type="button">保存</button>
+    </div>
+    <div id="authOk" class="auth-ok">利用コードを保存しました</div>
+  </div>
 
   <textarea id="term" placeholder="例：今日の会議でAPIとSDKとクラウドデプロイについて話します" autocomplete="off"></textarea>
 
@@ -172,6 +184,9 @@ HTML = r"""<!doctype html>
     const listenButton = document.getElementById("listen");
     const sendButton = document.getElementById("send");
     const latestBox = document.getElementById("latest");
+    const accessCodeInput = document.getElementById("accessCode");
+    const saveCodeButton = document.getElementById("saveCode");
+    const authOk = document.getElementById("authOk");
 
 const CHUNK_MS = 10000;
 const VOICE_RMS_THRESHOLD = 0.035;
@@ -189,8 +204,37 @@ let listening = false;
     let uploadQueue = Promise.resolve();
     let audioContext = null;
     let audioSource = null;
-    let analyser = null;
-    let lastTranscript = "";
+let analyser = null;
+let lastTranscript = "";
+
+    function currentAccessCode() {
+      return localStorage.getItem("tsujiru_access_code") || "";
+    }
+
+    function authHeaders(extra = {}) {
+      const code = currentAccessCode();
+      return code ? {...extra, "X-App-Token": code} : extra;
+    }
+
+    function refreshAuthState() {
+      const hasCode = !!currentAccessCode();
+      authOk.style.display = hasCode ? "block" : "none";
+      listenButton.disabled = !hasCode;
+      sendButton.disabled = !hasCode;
+      if (!hasCode) statusText.textContent = "利用コードを入力してください";
+    }
+
+    saveCodeButton.addEventListener("click", () => {
+      const code = accessCodeInput.value.trim();
+      if (!code) {
+        statusText.textContent = "利用コードを入力してください";
+        return;
+      }
+      localStorage.setItem("tsujiru_access_code", code);
+      accessCodeInput.value = "";
+      statusText.textContent = "利用コードを保存しました";
+      refreshAuthState();
+    });
 
     async function loadLatest() {
       try {
@@ -245,7 +289,11 @@ function appendTranscript(text) {
       const form = new FormData();
       form.append("audio", blob, `speech.${extension}`);
 
-      const response = await fetch("/transcribe", {method: "POST", body: form});
+      const response = await fetch("/transcribe", {
+        method: "POST",
+        headers: authHeaders(),
+        body: form
+      });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "音声の送信に失敗しました");
 
@@ -392,7 +440,7 @@ function appendTranscript(text) {
       try {
         const response = await fetch("/explain", {
           method: "POST",
-          headers: {"Content-Type": "application/json"},
+          headers: authHeaders({"Content-Type": "application/json"}),
           body: JSON.stringify({text})
         });
         const data = await response.json();
@@ -407,6 +455,7 @@ function appendTranscript(text) {
     });
 
     const NO_TERMS = "IT用語は見つかりませんでした";
+    refreshAuthState();
     loadLatest();
     setInterval(loadLatest, 1500);
   </script>
@@ -418,6 +467,27 @@ function appendTranscript(text) {
 
 class OpenAIError(Exception):
     pass
+
+
+class AuthError(Exception):
+    pass
+
+
+def app_secret():
+    return os.environ.get("APP_SECRET", "").strip()
+
+
+def require_app_token():
+    expected = app_secret()
+    if not expected:
+        raise AuthError("APP_SECRETが未設定です。公開前に利用コードを設定してください")
+
+    supplied = (
+        request.headers.get("X-App-Token", "").strip()
+        or request.args.get("token", "").strip()
+    )
+    if supplied != expected:
+        raise AuthError("利用コードが正しくありません")
 
 
 def api_key():
@@ -556,6 +626,11 @@ def text_only():
 
 @app.post("/explain")
 def explain():
+    try:
+        require_app_token()
+    except AuthError as error:
+        return jsonify(error=str(error)), 401
+
     payload = request.get_json(silent=True) or {}
     text = str(payload.get("text", "")).strip()
     if not text:
@@ -573,6 +648,11 @@ def explain():
 
 @app.post("/transcribe")
 def transcribe():
+    try:
+        require_app_token()
+    except AuthError as error:
+        return jsonify(error=str(error)), 401
+
     audio = request.files.get("audio")
     if audio is None:
         return jsonify(error="音声ファイルがありません"), 400
